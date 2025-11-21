@@ -23,23 +23,35 @@ DEFAULT_LANGUAGE = "de"
 MAX_TOKENS = 500
 TEMPERATURE = 0.7
 # System prompts per language (used to instruct the LLM in the target language)
+# System prompts per language (used to instruct the LLM in the target language)
 SYSTEM_PROMPTS = {
     "de": (
-        "Du bist ein kreativer Assistent. "
-        "Schreibe einen kurzen, natürlichen Absatz auf Deutsch "
-        "basierend auf der Anfrage des Nutzers."
+        "Du bist ein professioneller Podcast-Host. "
+        "Sprich natürlich, lebendig und engagiert. "
+        "Verwende rhetorische Fragen, kurze Pausen (durch '...' markiert) und Füllwörter wie 'nun', 'also', 'weißt du', "
+        "um wie ein echter Mensch zu klingen. Vermeide komplexe Schachtelsätze. "
+        "Schreibe wie man spricht, nicht wie man schreibt."
     ),
     "en": (
-        "You are a creative assistant. "
-        "Write a short, natural paragraph in English based on the user's request."
+        "You are a professional podcast host. "
+        "Speak naturally, vividly, and engagingly. "
+        "Use rhetorical questions, short pauses (marked by '...'), and filler words like 'well', 'you know', 'so', "
+        "to sound like a real human. Avoid complex sentence structures. "
+        "Write as you speak, not as you write."
     ),
     "fr": (
-        "Vous êtes un assistant créatif. "
-        "Écrivez un court paragraphe naturel en français basé sur la demande de l'utilisateur."
+        "Vous êtes un animateur de podcast professionnel. "
+        "Parlez naturellement, de manière vivante et engageante. "
+        "Utilisez des questions rhétoriques, de courtes pauses (marquées par '...') et des mots de remplissage comme 'eh bien', 'vous savez', "
+        "pour ressembler à un véritable humain. Évitez les phrases complexes. "
+        "Écrivez comme on parle, pas comme on écrit."
     ),
     "es": (
-        "Eres un asistente creativo. "
-        "Escribe un breve párrafo natural en español basado en la solicitud del usuario."
+        "Eres un presentador de podcast profesional. "
+        "Habla con naturalidad, de forma viva y atractiva. "
+        "Usa preguntas retóricas, pausas cortas (marcadas con '...') y muletillas como 'bueno', 'ya sabes', 'entonces', "
+        "para sonar como un humano real. Evita las oraciones complejas. "
+        "Escribe como hablas, no como escribes."
     )
 }
 
@@ -51,36 +63,36 @@ def get_system_prompt(language_code: str) -> str:
 # Tone / emotion instructions per language
 TONE_INSTRUCTIONS = {
     "de": {
-        "neutral": "Schreibe den Text in einem neutralen, sachlichen Ton.",
-        "happy": "Schreibe den Text fröhlich und enthusiastisch.",
-        "sad": "Schreibe den Text ruhig und nachdenklich / melancholisch.",
-        "angry": "Schreibe den Text energisch und bestimmt.",
-        "calm": "Schreibe den Text ruhig und gelassen.",
-        "excited": "Schreibe den Text sehr begeistert und lebhaft."
+        "neutral": "Sprich in einem entspannten, aber informativen Ton.",
+        "happy": "Sprich fröhlich, lachend und enthusiastisch.",
+        "sad": "Sprich leise, langsam und nachdenklich.",
+        "angry": "Sprich schnell, laut und energisch.",
+        "calm": "Sprich sehr ruhig, langsam und entspannt.",
+        "excited": "Sprich schnell, atemlos und begeistert."
     },
     "en": {
-        "neutral": "Write the text in a neutral, factual tone.",
-        "happy": "Write the text cheerful and enthusiastic.",
-        "sad": "Write the text calm and reflective / melancholic.",
-        "angry": "Write the text energetic and assertive.",
-        "calm": "Write the text calm and composed.",
-        "excited": "Write the text very excited and lively."
+        "neutral": "Speak in a relaxed but informative tone.",
+        "happy": "Speak cheerfully, smiling, and enthusiastically.",
+        "sad": "Speak softly, slowly, and reflectively.",
+        "angry": "Speak fast, loud, and energetically.",
+        "calm": "Speak very calmly, slowly, and relaxed.",
+        "excited": "Speak fast, breathlessly, and excitedly."
     },
     "fr": {
-        "neutral": "Écrivez le texte dans un ton neutre et factuel.",
-        "happy": "Écrivez le texte joyeux et enthousiaste.",
-        "sad": "Écrivez le texte calme et réfléchi / mélancolique.",
-        "angry": "Écrivez le texte énergique et affirmé.",
-        "calm": "Écrivez le texte calme et serein.",
-        "excited": "Écrivez le texte très enthousiaste et vivant."
+        "neutral": "Parlez d'un ton détendu mais informatif.",
+        "happy": "Parlez joyeusement, en souriant et avec enthousiasme.",
+        "sad": "Parlez doucement, lentement et de manière réfléchie.",
+        "angry": "Parlez vite, fort et énergiquement.",
+        "calm": "Parlez très calmement, lentement et détendu.",
+        "excited": "Parlez vite, à bout de souffle et avec excitation."
     },
     "es": {
-        "neutral": "Escribe el texto en un tono neutro y objetivo.",
-        "happy": "Escribe el texto alegre y entusiasta.",
-        "sad": "Escribe el texto tranquilo y reflexivo / melancólico.",
-        "angry": "Escribe el texto enérgico y contundente.",
-        "calm": "Escribe el texto con calma y serenidad.",
-        "excited": "Escribe el texto muy entusiasmado y vivaz."
+        "neutral": "Habla en un tono relajado pero informativo.",
+        "happy": "Habla alegremente, sonriendo y con entusiasmo.",
+        "sad": "Habla suavemente, despacio y reflexivamente.",
+        "angry": "Habla rápido, fuerte y con energía.",
+        "calm": "Habla muy tranquilo, despacio y relajado.",
+        "excited": "Habla rápido, sin aliento y emocionado."
     }
 }
 
@@ -96,17 +108,17 @@ def get_tone_instruction(language_code: str, emotion: str) -> str:
 # `MIN_SILENCE_LEN_MS`: minimum length of silence to consider for removal (milliseconds)
 # `KEEP_SILENCE_MS`: how much silence to keep when trimming (milliseconds)
 SILENCE_THRESH_DB = -40
-MIN_SILENCE_LEN_MS = 300
-KEEP_SILENCE_MS = 80
+MIN_SILENCE_LEN_MS = 400  # Increased to detect only real pauses
+KEEP_SILENCE_MS = 250     # Increased to keep natural breathing pauses (0.25s)
 
 # Advanced TTS generation parameters for more natural speech
 # `TEMPERATURE`: controls randomness/variation (0.0-1.0, higher = more variation)
 # `SPEED`: speech speed multiplier (0.5-2.0, 1.0 = normal)
 # `REPETITION_PENALTY`: reduces repetitive patterns (1.0-2.0, higher = less repetition)
 # `LENGTH_PENALTY`: affects sentence length preference (0.5-2.0)
-TTS_TEMPERATURE = 0.75
+TTS_TEMPERATURE = 0.8   # Slightly increased for more expressiveness
 TTS_SPEED = 1.0
-TTS_REPETITION_PENALTY = 2.0
+TTS_REPETITION_PENALTY = 1.2  # Reduced from 2.0 to avoid stilted speech
 TTS_LENGTH_PENALTY = 1.0
 
 # Logging

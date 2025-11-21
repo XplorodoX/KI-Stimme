@@ -180,25 +180,44 @@ class VoiceCloner:
                 cross = 0
 
             if cross > 0:
-                # naive sentence split
-                sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', text) if s.strip()]
-                if len(sentences) <= 1:
-                    # fallback to single generation
+                # Smart chunking: Group sentences into chunks of ~250 chars to preserve prosody
+                # Split by sentence endings first (keeping punctuation)
+                raw_sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', text) if s.strip()]
+                
+                chunks = []
+                current_chunk = ""
+                MAX_CHUNK_LENGTH = 250
+                
+                for sent in raw_sentences:
+                    # If a single sentence is huge, we have to take it as is (or split further, but let's assume reasonable length)
+                    if len(current_chunk) + len(sent) + 1 <= MAX_CHUNK_LENGTH:
+                        current_chunk = (current_chunk + " " + sent).strip()
+                    else:
+                        if current_chunk:
+                            chunks.append(current_chunk)
+                        current_chunk = sent
+                if current_chunk:
+                    chunks.append(current_chunk)
+                
+                # If we only have one chunk effectively, just run it directly
+                if len(chunks) <= 1:
                     _safe_tts_to_file(tts_kwargs)
                 else:
+                    logger.info(f"Split text into {len(chunks)} chunks for natural flow")
                     with tempfile.TemporaryDirectory() as td:
                         part_files = []
-                        for i, sent in enumerate(sentences):
+                        for i, chunk in enumerate(chunks):
                             part_path = Path(td) / f"part_{i}_{uuid.uuid4().hex}.wav"
                             part_kwargs = tts_kwargs.copy()
-                            part_kwargs["text"] = sent
+                            part_kwargs["text"] = chunk
                             part_kwargs["file_path"] = str(part_path)
                             try:
                                 _safe_tts_to_file(part_kwargs)
-                            except Exception:
-                                # ensure part generation raises clearly if it fails
+                                part_files.append(str(part_path))
+                            except Exception as e:
+                                logger.warning(f"Failed to generate chunk {i}: {e}")
+                                # If a chunk fails, we might skip it or fail. Let's fail to be safe.
                                 raise
-                            part_files.append(str(part_path))
 
                         # concat with crossfade
                         combined = None
