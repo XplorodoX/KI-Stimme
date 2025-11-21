@@ -1,0 +1,4 @@
+TTS
+gradio
+openai
+pydub
