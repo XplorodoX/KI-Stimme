@@ -31,7 +31,9 @@ except Exception as e:
     llm = None
 
 def process_pipeline(audio_file, prompt, language, emotion, trim_start=0.0, trim_end=0.0,
-                     silence_thresh_db=None, min_silence_len_ms=None, keep_silence_ms=None):
+                     silence_thresh_db=None, min_silence_len_ms=None, keep_silence_ms=None,
+                     style_ref=None, crossfade_ms=40, temperature=None, speed=None, 
+                     repetition_penalty=None, length_penalty=None):
     """Process the complete pipeline: LLM text generation + voice cloning."""
     
     # Input validation
@@ -72,6 +74,9 @@ def process_pipeline(audio_file, prompt, language, emotion, trim_start=0.0, trim
         output_path = config.OUTPUT_DIR / f"output_{timestamp}.wav"
         
         logger.info("Starting voice cloning...")
+        # Prepare optional style reference path
+        style_wav_path = str(style_ref) if style_ref else None
+
         cloner.clone_voice(
             generated_text,
             audio_file,
@@ -81,6 +86,12 @@ def process_pipeline(audio_file, prompt, language, emotion, trim_start=0.0, trim
             silence_thresh_db=silence_thresh_db,
             min_silence_len_ms=min_silence_len_ms,
             keep_silence_ms=keep_silence_ms,
+            style_wav=style_wav_path,
+            crossfade_ms=int(crossfade_ms) if crossfade_ms is not None else 40,
+            temperature=temperature,
+            speed=speed,
+            repetition_penalty=repetition_penalty,
+            length_penalty=length_penalty,
         )
         logger.info(f"Voice cloning completed: {output_path}")
 
@@ -177,6 +188,18 @@ with gr.Blocks(title="AI Voice Cloner", theme=gr.themes.Soft()) as demo:
             min_silence = gr.Slider(minimum=50, maximum=2000, step=50, value=config.MIN_SILENCE_LEN_MS, label="Min Silence Length (ms)")
             keep_sil = gr.Slider(minimum=0, maximum=500, step=10, value=config.KEEP_SILENCE_MS, label="Kept Silence (ms)")
             
+            gr.Markdown("### 7️⃣ Stil-Referenz & Übergänge")
+            style_ref = gr.Audio(label="Stil-Referenz (optional, kurz)", type="filepath", sources=["upload"]) 
+            crossfade_ms = gr.Slider(minimum=0, maximum=500, step=5, value=40, label="Crossfade beim Zusammenfügen (ms)")
+            
+            gr.Markdown("### 8️⃣ Erweiterte Einstellungen (für natürlichere Sprache)")
+            with gr.Row():
+                temperature = gr.Slider(minimum=0.1, maximum=1.0, step=0.05, value=config.TTS_TEMPERATURE, label="Temperature (Variation)")
+                speed = gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=config.TTS_SPEED, label="Geschwindigkeit")
+            with gr.Row():
+                repetition_penalty = gr.Slider(minimum=1.0, maximum=3.0, step=0.1, value=config.TTS_REPETITION_PENALTY, label="Repetition Penalty")
+                length_penalty = gr.Slider(minimum=0.5, maximum=2.0, step=0.1, value=config.TTS_LENGTH_PENALTY, label="Length Penalty")
+            
             generate_btn = gr.Button("🚀 Stimme generieren", variant="primary", size="lg")
         
         with gr.Column():
@@ -202,6 +225,12 @@ with gr.Blocks(title="AI Voice Cloner", theme=gr.themes.Soft()) as demo:
             silence_thresh,
             min_silence,
             keep_sil,
+            style_ref,
+            crossfade_ms,
+            temperature,
+            speed,
+            repetition_penalty,
+            length_penalty,
         ],
         outputs=[text_output, audio_output]
     )

@@ -5,6 +5,9 @@ from pathlib import Path
 from TTS.api import TTS
 import config
 from pydub import AudioSegment, silence
+import re
+import tempfile
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,12 @@ class VoiceCloner:
         silence_thresh_db=None,
         min_silence_len_ms=None,
         keep_silence_ms=None,
+        style_wav=None,
+        crossfade_ms=40,
+        temperature=None,
+        speed=None,
+        repetition_penalty=None,
+        length_penalty=None,
     ):
         """
         Generate audio from text using the speaker's voice.
@@ -74,30 +83,136 @@ class VoiceCloner:
             # Ensure output directory exists
             Path(file_path).parent.mkdir(parents=True, exist_ok=True)
             
-            # Try to pass emotion/style to the underlying TTS if supported.
-            # The Coqui TTS `tts_to_file` signature may accept extra kwargs like `style_wav` or `emotion`.
+            # Prepare kwargs for TTS
             tts_kwargs = {
                 "text": text,
                 "speaker_wav": speaker_wav_path,
                 "language": language,
-                "file_path": file_path
+                "file_path": file_path,
             }
 
+            # Attach emotion/style if provided
             if emotion:
-                # We try common parameter names; if the TTS implementation does not accept them,
-                # we'll fall back to calling without emotion.
-                possible_emotion_keys = ["emotion", "style", "style_name", "style_wav"]
-                for k in possible_emotion_keys:
+                # we'll add emotion under several possible keys
+                for k in ["emotion", "style", "style_name"]:
                     tts_kwargs[k] = emotion
+            if style_wav:
+                tts_kwargs["style_wav"] = style_wav
+            
+            # Add advanced generation parameters for more natural speech
+            if temperature is not None:
+                tts_kwargs["temperature"] = float(temperature)
+            else:
+                tts_kwargs["temperature"] = config.TTS_TEMPERATURE
+            
+            if speed is not None:
+                tts_kwargs["speed"] = float(speed)
+            else:
+                tts_kwargs["speed"] = config.TTS_SPEED
+            
+            if repetition_penalty is not None:
+                tts_kwargs["repetition_penalty"] = float(repetition_penalty)
+            else:
+                tts_kwargs["repetition_penalty"] = config.TTS_REPETITION_PENALTY
+            
+            if length_penalty is not None:
+                tts_kwargs["length_penalty"] = float(length_penalty)
+            else:
+                tts_kwargs["length_penalty"] = config.TTS_LENGTH_PENALTY
 
+            def _safe_tts_to_file(call_kwargs):
+                """Try calling tts_to_file with retries and fallback for unsupported kwargs.
+
+                The TTS backend may reject unknown model_kwargs (e.g. 'style' or 'style_name').
+                This helper will attempt to parse the error message, remove offending keys,
+                and retry with progressively smaller sets of kwargs.
+                """
+                # Make copies to avoid mutating the outer dict
+                kw = dict(call_kwargs)
+
+                # Attempt 1: full kwargs
+                try:
+                    self.tts.tts_to_file(**kw)
+                    return
+                except Exception as e1:
+                    logger.warning(f"TTS first attempt failed: {e1}")
+                    err_text = str(e1)
+
+                # Attempt 2: if the error lists unused model_kwargs, try to remove them
+                try:
+                    m = re.search(r"The following `model_kwargs` are not used by the model:\s*\[([^\]]+)\]", err_text)
+                    if m:
+                        bad = [k.strip().strip("'\" ") for k in m.group(1).split(',')]
+                        for k in bad:
+                            if k in kw:
+                                kw.pop(k, None)
+                        logger.info(f"Removed unsupported model kwargs: {bad} and retrying")
+                        self.tts.tts_to_file(**kw)
+                        return
+                except Exception as e2:
+                    logger.warning(f"TTS second attempt failed after removing reported bad keys: {e2}")
+
+                # Attempt 3: remove commonly optional keys and retry
+                try:
+                    for k in ["emotion", "style", "style_name", "style_wav", "temperature", "speed", "repetition_penalty", "length_penalty"]:
+                        kw.pop(k, None)
+                    logger.info("Removed optional emotion/style/generation keys and retrying")
+                    self.tts.tts_to_file(**kw)
+                    return
+                except Exception as e3:
+                    logger.warning(f"TTS third attempt failed after stripping optional keys: {e3}")
+
+                # Attempt 4: minimal fallback
+                try:
+                    minimal = {k: kw[k] for k in ["text", "speaker_wav", "file_path", "language"] if k in kw}
+                    logger.info("Trying minimal kwargs for synthesis")
+                    self.tts.tts_to_file(**minimal)
+                    return
+                except Exception as e4:
+                    logger.error(f"All TTS attempts failed: {e4}")
+                    # raise the last exception so the outer logic can handle it
+                    raise
+
+            # If crossfade is requested, synthesize sentence-by-sentence and append with crossfade
             try:
-                self.tts.tts_to_file(**tts_kwargs)
-            except TypeError:
-                # Fallback: call without emotion-related keys
-                for k in ["emotion", "style", "style_name", "style_wav"]:
-                    tts_kwargs.pop(k, None)
-                logger.warning("TTS backend did not accept emotion/style kwargs; falling back to default synthesis")
-                self.tts.tts_to_file(**tts_kwargs)
+                cross = int(crossfade_ms) if crossfade_ms is not None else 0
+            except Exception:
+                cross = 0
+
+            if cross > 0:
+                # naive sentence split
+                sentences = [s.strip() for s in re.split(r'(?<=[\.\!\?])\s+', text) if s.strip()]
+                if len(sentences) <= 1:
+                    # fallback to single generation
+                    _safe_tts_to_file(tts_kwargs)
+                else:
+                    with tempfile.TemporaryDirectory() as td:
+                        part_files = []
+                        for i, sent in enumerate(sentences):
+                            part_path = Path(td) / f"part_{i}_{uuid.uuid4().hex}.wav"
+                            part_kwargs = tts_kwargs.copy()
+                            part_kwargs["text"] = sent
+                            part_kwargs["file_path"] = str(part_path)
+                            try:
+                                _safe_tts_to_file(part_kwargs)
+                            except Exception:
+                                # ensure part generation raises clearly if it fails
+                                raise
+                            part_files.append(str(part_path))
+
+                        # concat with crossfade
+                        combined = None
+                        for p in part_files:
+                            seg = AudioSegment.from_file(p)
+                            if combined is None:
+                                combined = seg
+                            else:
+                                combined = combined.append(seg, crossfade=cross)
+
+                        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+                        combined.export(file_path, format=Path(file_path).suffix.replace('.', ''))
+            else:
+                _safe_tts_to_file(tts_kwargs)
 
             # Post-process: remove or reduce long silences between sentences
             try:

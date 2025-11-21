@@ -99,5 +99,15 @@ SILENCE_THRESH_DB = -40
 MIN_SILENCE_LEN_MS = 300
 KEEP_SILENCE_MS = 80
 
+# Advanced TTS generation parameters for more natural speech
+# `TEMPERATURE`: controls randomness/variation (0.0-1.0, higher = more variation)
+# `SPEED`: speech speed multiplier (0.5-2.0, 1.0 = normal)
+# `REPETITION_PENALTY`: reduces repetitive patterns (1.0-2.0, higher = less repetition)
+# `LENGTH_PENALTY`: affects sentence length preference (0.5-2.0)
+TTS_TEMPERATURE = 0.75
+TTS_SPEED = 1.0
+TTS_REPETITION_PENALTY = 2.0
+TTS_LENGTH_PENALTY = 1.0
+
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
