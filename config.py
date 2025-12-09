@@ -116,9 +116,9 @@ KEEP_SILENCE_MS = 250     # Increased to keep natural breathing pauses (0.25s)
 # `SPEED`: speech speed multiplier (0.5-2.0, 1.0 = normal)
 # `REPETITION_PENALTY`: reduces repetitive patterns (1.0-2.0, higher = less repetition)
 # `LENGTH_PENALTY`: affects sentence length preference (0.5-2.0)
-TTS_TEMPERATURE = 0.8   # Slightly increased for more expressiveness
+TTS_TEMPERATURE = 0.7   # Lowered for stability
 TTS_SPEED = 1.0
-TTS_REPETITION_PENALTY = 1.2  # Reduced from 2.0 to avoid stilted speech
+TTS_REPETITION_PENALTY = 2.0  # Increased to prevent loops/artifacts
 TTS_LENGTH_PENALTY = 1.0
 
 # Logging
