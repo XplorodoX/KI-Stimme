@@ -1,16 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from fastapi.responses import JSONResponse, StreamingResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 import logging
 import config
+from voice_cloner import VoiceCloner
 from llm_handler import LLMHandler
 import os
 import uvicorn
 from pathlib import Path
 from typing import List, Optional
 import json
-import edge_tts
-import asyncio
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -18,32 +17,23 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="MetaHuman Backend API", description="API for LLM Chat and TTS Generation")
 
-# --- Edge TTS Configuration ---
-# Florian is a natural, warm, friendly German male voice
-EDGE_TTS_VOICE = "de-DE-FlorianMultilingualNeural"
-
-# Emotion to voice rate/pitch mapping for more expressive speech
-# Keep pitch values small to avoid Edge TTS errors
-EMOTION_SETTINGS = {
-    "neutral": {"rate": "+0%", "pitch": "+0Hz"},
-    "happy": {"rate": "+5%", "pitch": "+10Hz"},
-    "sad": {"rate": "-10%", "pitch": "-10Hz"},
-    "angry": {"rate": "+10%", "pitch": "+5Hz"},
-    "calm": {"rate": "-5%", "pitch": "-5Hz"},
-    "excited": {"rate": "+10%", "pitch": "+10Hz"},
-    "thinking": {"rate": "-5%", "pitch": "+0Hz"},
-    "surprised": {"rate": "+5%", "pitch": "+10Hz"},
-    "fear": {"rate": "+5%", "pitch": "+5Hz"},
-}
-
 # --- Global Instances ---
+cloner: Optional[VoiceCloner] = None
 llm: Optional[LLMHandler] = None
 
 # --- Initialization ---
 @app.on_event("startup")
 async def startup_event():
-    global llm
+    global cloner, llm
     logger.info("Starting up backend services...")
+    
+    # Initialize VoiceCloner
+    try:
+        logger.info("Initializing VoiceCloner (Coqui XTTS)...")
+        cloner = VoiceCloner()
+        logger.info("VoiceCloner ready!")
+    except Exception as e:
+        logger.error(f"Failed to initialize VoiceCloner: {e}")
     
     # Initialize LLMHandler
     try:
@@ -52,13 +42,11 @@ async def startup_event():
         logger.info("LLMHandler ready!")
     except Exception as e:
         logger.error(f"Failed to initialize LLMHandler: {e}")
-    
-    logger.info(f"🎙️ Using Edge TTS with voice: {EDGE_TTS_VOICE}")
 
 # --- Models ---
 class ChatMessage(BaseModel):
     text: str
-    sender: str  # 'bot' or 'user'
+    sender: str
 
 class ChatRequest(BaseModel):
     message: str
@@ -69,9 +57,9 @@ class TTSRequest(BaseModel):
     text: str
     language: str = "de"
     emotion: str = "neutral"
-    voice: Optional[str] = None
-    rate: Optional[str] = None
-    pitch: Optional[str] = None
+    speaker_wav: Optional[str] = None
+    temperature: Optional[float] = None
+    speed: Optional[float] = None
 
 # --- Helpers ---
 SYSTEM_PROMPT = """Du bist Alex, ein normaler Typ Anfang 20.
@@ -114,6 +102,9 @@ EMOTIONEN FÜR DEN AVATAR:
 ANTWORT-FORMAT (immer JSON):
 {"text": "Deine normale Antwort", "emotion": "Happy/Sad/Angry/Surprised/Fear/Neutral"}"""
 
+# Default reference voice - use a good quality sample!
+DEFAULT_SPEAKER_WAV = "test_natural_output.wav"
+
 # --- Endpoints ---
 
 @app.post("/chat")
@@ -122,25 +113,21 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=503, detail="LLM service not available")
     
     try:
-        # Build messages list manually to support history
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Add history (limit to last 20 turns)
         recent_history = request.history[-20:] if request.history else []
         for msg in recent_history:
             role = "user" if msg.sender == "user" else "assistant"
             messages.append({"role": role, "content": msg.text})
             
-        # Add current message
         messages.append({"role": "user", "content": request.message})
         
         logger.info(f"Sending request to LLM ({len(messages)} messages)")
         
-        # Call Ollama via OpenAI client from llm_handler
         response = llm.client.chat.completions.create(
             model=request.model,
             messages=messages,
-            max_tokens=250, # Keep it brief
+            max_tokens=250,
             temperature=0.7,
             response_format={"type": "json_object"}
         )
@@ -149,16 +136,13 @@ async def chat_endpoint(request: ChatRequest):
         logger.info(f"LLM Response: {content}")
         
         try:
-            # Parse JSON from LLM
             parsed = json.loads(content)
-            # Ensure keys exist
             if "text" not in parsed:
                 parsed["text"] = content
             if "emotion" not in parsed:
                 parsed["emotion"] = "Neutral"
             return parsed
         except json.JSONDecodeError:
-            # Fallback if LLM forgets JSON
             return {"text": content, "emotion": "Neutral"}
 
     except Exception as e:
@@ -167,70 +151,49 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.post("/tts")
 async def tts_endpoint(request: TTSRequest):
-    """Generate natural sounding speech using Microsoft Edge TTS."""
+    if not cloner:
+        raise HTTPException(status_code=503, detail="TTS service not available")
+
     try:
-        text = request.text.strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="Text cannot be empty")
+        speaker_wav = request.speaker_wav or DEFAULT_SPEAKER_WAV
+        if not os.path.exists(speaker_wav):
+            pot_path = Path("outputs") / speaker_wav
+            if pot_path.exists():
+                speaker_wav = str(pot_path)
+            else:
+                wavs = list(Path("outputs").glob("*.wav"))
+                if wavs:
+                    speaker_wav = str(wavs[0])
+                    logger.warning(f"Default speaker not found, using: {speaker_wav}")
+                else:
+                    raise HTTPException(status_code=404, detail="No reference audio found")
+
+        output_filename = f"tts_{os.urandom(4).hex()}.wav"
+        output_path = config.OUTPUT_DIR / output_filename
+        config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         
-        # Select voice (default: Florian - warm, friendly German male)
-        voice = request.voice or EDGE_TTS_VOICE
+        logger.info(f"🎙️ Generating TTS (Emotion: {request.emotion}): {request.text[:50]}...")
         
-        # Get emotion settings for pitch/rate adjustment
-        emotion = request.emotion.lower() if request.emotion else "neutral"
-        settings = EMOTION_SETTINGS.get(emotion, EMOTION_SETTINGS["neutral"])
-        
-        # Allow manual overrides
-        rate = request.rate or settings["rate"]
-        pitch = request.pitch or settings["pitch"]
-        
-        logger.info(f"🎙️ Edge TTS: voice={voice}, emotion={emotion}, rate={rate}, pitch={pitch}")
-        logger.info(f"📝 Text: {text[:80]}...")
-        
-        # Generate audio with edge-tts
-        communicate = edge_tts.Communicate(
-            text=text,
-            voice=voice,
-            rate=rate,
-            pitch=pitch
+        generated_file = cloner.clone_voice(
+            text=request.text,
+            speaker_wav_path=str(speaker_wav),
+            language=request.language,
+            emotion=request.emotion,
+            file_path=str(output_path),
+            temperature=request.temperature or 0.7,
+            speed=request.speed or 1.0
         )
         
-        # Collect audio bytes
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data += chunk["data"]
-        
-        if not audio_data:
-            raise HTTPException(status_code=500, detail="No audio generated")
-        
-        logger.info(f"✅ Generated {len(audio_data)} bytes of audio")
-        
-        # Return audio directly as MP3 (Edge TTS outputs MP3)
-        return Response(
-            content=audio_data,
-            media_type="audio/mpeg"
-        )
-        
+        def iterfile():
+            with open(generated_file, mode="rb") as f:
+                yield from f
+
+        return StreamingResponse(iterfile(), media_type="audio/wav")
+
     except Exception as e:
         logger.error(f"TTS generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/voices")
-async def list_voices():
-    """List available Edge TTS voices."""
-    return {
-        "current": EDGE_TTS_VOICE,
-        "available": {
-            "male": "de-DE-FlorianMultilingualNeural",
-            "male_alt": "de-DE-ConradNeural",
-            "female": "de-DE-SeraphinaMultilingualNeural",
-            "female_alt": "de-DE-AmalaNeural",
-        },
-        "emotions": list(EMOTION_SETTINGS.keys())
-    }
-
 if __name__ == "__main__":
-    print("🚀 Starting MetaHuman Backend API with Edge TTS...")
-    print(f"🎙️ Voice: {EDGE_TTS_VOICE}")
+    print("🚀 Starting MetaHuman Backend API with Coqui XTTS...")
     uvicorn.run(app, host="0.0.0.0", port=8000)
